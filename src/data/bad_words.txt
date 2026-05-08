@@ -1,0 +1,19 @@
+# bad_words.txt — one word per line. Lines starting with # are ignored.
+#
+# Matching strategy:
+#   • text is lowercased
+#   • leet/homoglyph substitutions applied (0->o, 1->i, 3->e, 4->a, 5->s, 7->t, @->a, $->s, !->i)
+#   • zero-width characters stripped
+#   • non-letters squashed so f.u.c.k or fu_ck still match
+#   • whole-word match via \b boundaries — "scunthorpe" will NOT match "cunt"
+#
+# Add or remove entries to fit your community's standards. After editing,
+# run /automod_reload (Manage Server permission) to pick up changes without
+# restarting the bot.
+
+fuck
+shit
+bitch
+asshole
+dickhead
+bastard
