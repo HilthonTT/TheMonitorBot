@@ -90,10 +90,13 @@ class UserInfoBot(commands.Bot):
     async def on_ready(self) -> None:
         assert self.user is not None
         log.info("Logged in as %s (id=%s)", self.user, self.user.id)
+        
+        activity_status = os.getenv("ACTIVITY_STATUS") or "Always monitoring your behavior"
+        
         await self.change_presence(
             activity=discord.Activity(
                 type=discord.ActivityType.watching,
-                name="for trouble | /userinfo",
+                name=activity_status,
             ),
         )
         

@@ -34,11 +34,16 @@ log = logging.getLogger(__name__)
 BAD_WORDS_FILE_NAME = "bad_words.txt"
 WORDS_FILE = Path(__file__).resolve().parent.parent / "data" / BAD_WORDS_FILE_NAME
 
-# Common leet-speak / homoglyph substitutions used to bypass filters
-LEET_MAP = str.maketrans({
+# Common leet-speak / homoglyph substitutions used to bypass filters.
+# Applied only when the symbol sits *between* letters, so trailing punctuation
+# like "fuck!" isn't corrupted into "fucki" (which breaks word-boundary match).
+LEET_LOOKUP = {
     "0": "o", "1": "i", "3": "e", "4": "a", "5": "s",
     "7": "t", "@": "a", "$": "s", "!": "i",
-})
+}
+LEET_INNER_RE = re.compile(
+    r"(?<=[a-z])([" + re.escape("".join(LEET_LOOKUP)) + r"])(?=[a-z])"
+)
 ZW_RE = re.compile(r"[\u200B-\u200D\uFEFF]")  # zero-width chars
 LETTERS_ONLY_RE = re.compile(r"[^a-z]+")
 SQUASH_INNER_RE = re.compile(r"(?<=[a-z])[^a-z\s](?=[a-z])")
@@ -48,13 +53,19 @@ NON_LETTER_RUN_RE = re.compile(r"[^a-z\s]+")
 def normalize(text: str) -> str:
     """
     Lowercase + strip zero-width + leet-translate + obfuscation-aware.
- 
-    A single non-letter character sandwiched between letters is removed,
-    so 'f.u.c.k' collapses to 'fuck'. Whitespace is preserved as a word
-    boundary; other punctuation runs become a single space. Word-boundary
+
+    Leet substitutions only fire when the symbol sits between letters
+    ('sh!t' -> 'shit'), so trailing punctuation like 'fuck!' is NOT
+    rewritten into 'fucki' (which would break the \\b word boundary).
+    A single non-letter sandwiched between letters is removed, so
+    'f.u.c.k' collapses to 'fuck'. Whitespace is preserved as a word
+    boundary; other punctuation runs become a single space. The
+    pattern itself ('f+u+c+k+') tolerates letter repetition, so
+    'fuuuck' / 'fuckkkk' match without changing the input. Word-boundary
     matching downstream then prevents false positives like 'scunthorpe'.
     """
-    t = ZW_RE.sub("", text).lower().translate(LEET_MAP)
+    t = ZW_RE.sub("", text).lower()
+    t = LEET_INNER_RE.sub(lambda m: LEET_LOOKUP[m.group(1)], t)
     t = SQUASH_INNER_RE.sub("", t)
     return NON_LETTER_RUN_RE.sub(" ", t)
 
@@ -69,13 +80,23 @@ def load_words() -> list[str]:
     ]
     
 def build_pattern(words: list[str]) -> re.Pattern[str] | None:
+    """
+    Build an alternation that tolerates letter repetition: each letter is
+    quantified with '+', so 'fuck' matches 'fuck', 'fuuuck', and 'fuckkkk'.
+    Word-boundary anchors guard against substring false positives
+    ('scunthorpe' won't hit 'cunt').
+    """
     if not words:
         return None
-    safe = [re.escape(LETTERS_ONLY_RE.sub("", w.lower())) for w in words]
-    safe = [w for w in safe if w]
-    if not safe:
+    parts: list[str] = []
+    for w in words:
+        cleaned = LETTERS_ONLY_RE.sub("", w.lower())
+        if not cleaned:
+            continue
+        parts.append("".join(f"{re.escape(c)}+" for c in cleaned))
+    if not parts:
         return None
-    return re.compile(rf"\b(?:{'|'.join(safe)})\b")
+    return re.compile(rf"\b(?:{'|'.join(parts)})\b")
 
 class AutoMod(commands.Cog):
     """Bad-language filter and honeypot"""
