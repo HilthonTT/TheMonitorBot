@@ -78,3 +78,6 @@ class Admin(commands.Cog):
             f"scrape every readable channel will still find it via the API.",
             ephemeral=True,
         )    
+        
+async def setup(bot: commands.Bot) -> None:
+    await bot.add_cog(Admin(bot))

@@ -72,7 +72,7 @@ CREATE INDEX IF NOT EXISTS idx_tickets_user ON tickets(guild_id, user_id, status
 class Database:
     def __init__(self, path: Path = DB_PATH) -> None:
         self.path = path
-        self._conn = aiosqlite.Connection | None = None
+        self._conn: aiosqlite.Connection | None = None
         
     async def connect(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)

@@ -1,8 +1,12 @@
-# The Monitor - Advanced Discord Mod & Ticket Bot
+# Advanced Discord Mod & Ticket Bot
 
 A `discord.py` 2.x bot with rich `/userinfo`, full moderation, automod with
 leet-speak-aware language filter, a spam-bot honeypot, and a persistent-button
 support-ticket system. State is stored in SQLite via `aiosqlite`.
+
+> **Terminology:** Discord's API and every library call them **guilds**.
+> The user-facing UI calls them **servers**. They're the same thing.
+> This README and the code use both interchangeably.
 
 ## Features
 
@@ -28,7 +32,7 @@ support-ticket system. State is stored in SQLite via `aiosqlite`.
 - Whole-word matching via `\b` boundaries to minimize false positives
 - Staff (Manage Messages) are exempt
 - Words live in `data/bad_words.txt`; `/automod_reload` picks up edits live
-- `/automod` toggle per guild
+- `/automod` toggle per server
 
 ### Honeypot (`cogs/automod.py`)
 
@@ -42,7 +46,7 @@ support-ticket system. State is stored in SQLite via `aiosqlite`.
 
 - `/ticket_panel` posts an embed with a persistent "Open Ticket" button
 - Each ticket creates a private text channel (user + staff role + bot only)
-- One open ticket per user per guild (enforced)
+- One open ticket per user per server (enforced)
 - "Close Ticket" button or `/ticket_close` saves a plaintext transcript to the
   mod-log channel and deletes the ticket channel
 - `/ticket_add` and `/ticket_remove` for adding extra participants
@@ -56,63 +60,175 @@ support-ticket system. State is stored in SQLite via `aiosqlite`.
 - `/set_warn_thresholds` — tune auto-kick / auto-ban
 - `/config` — show current settings
 
+---
+
 ## Setup
 
-### 1. Discord developer portal
+The setup splits into two phases: getting the bot **online** (the developer
+portal, environment, and Python side), then getting it **configured** (the
+slash commands you run inside your server once the bot is in it).
 
-Create an application + bot at <https://discord.com/developers/applications>
-and **enable these privileged intents** on the Bot tab:
+### Phase 1 — Get the bot online
 
-- Server Members Intent
-- Presence Intent
-- **Message Content Intent** — required for automod and honeypot
+#### 1. Create the application and bot
 
-When inviting the bot, grant at minimum:
-`Manage Channels`, `Manage Roles`, `Kick Members`, `Ban Members`,
-`Read Messages/View Channels`, `Send Messages`, `Manage Messages`,
-`Embed Links`, `Attach Files`, `Read Message History`.
+1. Go to <https://discord.com/developers/applications> and click **New Application**. Name it whatever you want.
+2. In the left sidebar, open the **Bot** tab.
+3. Under **Privileged Gateway Intents**, enable all three:
+   - ✅ **Presence Intent** — needed for `/userinfo` to show online status
+   - ✅ **Server Members Intent** — needed for member events and role lists
+   - ✅ **Message Content Intent** — needed for automod + honeypot
+4. Click **Reset Token** → **Copy**. This is your `DISCORD_TOKEN`. Treat it
+   like a password — anyone with it can control the bot.
 
-### 2. Install dependencies
+#### 2. Invite the bot to your server
+
+Still in the developer portal:
+
+1. Open the **OAuth2** tab → **URL Generator**.
+2. Under **Scopes**, check `bot` and `applications.commands`.
+3. Under **Bot Permissions**, check at minimum:
+   `Manage Channels`, `Manage Roles`, `Kick Members`, `Ban Members`,
+   `View Channels`, `Send Messages`, `Manage Messages`,
+   `Embed Links`, `Attach Files`, `Read Message History`.
+4. Copy the generated URL at the bottom, paste it into your browser, pick
+   your server, and authorize.
+
+> **Heads up on role hierarchy.** Once the bot joins, drag its auto-created
+> role **above** any role it should be able to moderate. Discord forbids
+> moderating users whose top role is at or above the bot's. The cog enforces
+> this and tells you if you try.
+
+#### 3. Install Python dependencies
+
+From the project root:
 
 ```bash
-python -m venv .venv
-.venv\Scripts\activate   # Windows
-# source .venv/bin/activate  # Linux/macOS
+python -m venv venv
+venv\Scripts\activate           # Windows (PowerShell or cmd)
+# source venv/bin/activate      # Linux/macOS
 pip install -r requirements.txt
 ```
 
-### 3. Configure environment
+#### 4. Configure environment variables
 
-Copy `.env.example` to `.env` and fill in:
+Copy `.env.example` to `.env` and fill in at least the token:
 
 ```
-DISCORD_TOKEN=your_bot_token
-DEV_GUILD_ID=123456789012345678   # optional — instant slash sync to a single guild
-BOT_DB_PATH=data/bot.sqlite3      # optional — override DB location
+DISCORD_TOKEN=paste_the_token_from_step_1_here
+DEV_GUILD_ID=                    # optional — see below
+BOT_DB_PATH=data/bot.sqlite3     # optional — DB file location
 ```
 
-### 4. Run
+##### How to get a `DEV_GUILD_ID` (and why you want one)
+
+`DEV_GUILD_ID` is your Discord **server's** ID. Slash commands sync
+**globally by default**, which Discord can take **up to an hour** to
+propagate. Setting `DEV_GUILD_ID` makes the bot register commands directly
+on that one server, which is **near-instant** — invaluable while iterating.
+
+To copy a server ID:
+
+1. In Discord, go to **User Settings → Advanced** and turn on
+   **Developer Mode**.
+2. Right-click your server's icon in the sidebar → **Copy Server ID**.
+3. Paste it into `.env` as `DEV_GUILD_ID=...` (a long number, no quotes).
+
+The same right-click trick also gives you channel IDs and role IDs if you
+ever need them — though the in-server commands below let you pick channels
+and roles via Discord's autocomplete UI without touching IDs.
+
+> When you go to production, **clear `DEV_GUILD_ID`** so commands sync
+> globally and work in every server the bot is in.
+
+#### 5. Run the bot
 
 ```bash
 python bot.py
 ```
 
-### 5. Configure per-guild (run once after the bot joins)
-
-In your server, run:
+A successful startup looks like:
 
 ```
-/set_modlog       channel:#mod-log
-/ticket_config    category:Tickets staff_role:@Staff
-/ticket_panel     in the channel where users should open tickets
+[INFO] bot: Database connected at data/bot.sqlite3
+[INFO] bot: Loaded extension cogs.admin
+[INFO] bot: Loaded extension cogs.automod
+[INFO] bot: Loaded extension cogs.moderation
+[INFO] bot: Loaded extension cogs.tickets
+[INFO] bot: Loaded extension cogs.userinfo
+[INFO] bot: Synced 22 commands to dev guild 123456789012345678
+[INFO] bot: Logged in as YourBot#1234 (id=...)
 ```
 
-Optional:
+Leave it running. Ctrl+C to stop.
+
+### Phase 2 — Configure the server
+
+With the bot online and in your server, run these slash commands. You need
+**Manage Server** for all of them. Discord autocomplete will help — type `/`
+and the command name and it'll prompt you for channels/roles.
+
+#### Required for all features
 
 ```
-/set_honeypot         channel:#trap        (deny @everyone view first!)
-/set_warn_thresholds  kick_at:3 ban_at:5
+/set_modlog channel:#mod-log
 ```
+
+Pick (or create) a private staff-only channel. All moderation actions,
+auto-warn reports, honeypot bans, and ticket transcripts get posted here.
+Without this set, those events still happen but nothing is logged anywhere
+public.
+
+#### Required for tickets
+
+```
+/ticket_config category:Tickets staff_role:@Staff
+```
+
+`category` is a Discord **channel category** under which new ticket
+channels will be created. `staff_role` is the role that should be granted
+access to every ticket. Create both first if you don't have them.
+
+```
+/ticket_panel
+```
+
+Run this **in the channel where you want users to open tickets from** (e.g.
+`#support`). It posts an embed with an "Open Ticket" button. Users click it
+to spawn a private channel.
+
+#### Optional — honeypot anti-spam
+
+Create a channel like `#・do-not-post` first. **Important:** in the channel
+settings, deny `View Channel` for `@everyone` and for any role that should
+never get banned. The point is that no human should ever see or post there;
+only spam bots that scrape every readable channel via the API will find it.
+
+```
+/set_honeypot channel:#・do-not-post
+```
+
+To disable later: `/clear_honeypot`.
+
+#### Optional — warning thresholds
+
+Defaults are auto-kick at 3 warnings, auto-ban at 5. Change with:
+
+```
+/set_warn_thresholds kick_at:3 ban_at:5
+```
+
+`ban_at` must be strictly greater than `kick_at`.
+
+#### Verify
+
+```
+/config
+```
+
+Shows everything currently set for this server.
+
+---
 
 ## Project layout
 
@@ -124,7 +240,7 @@ discord_bot/
 │   ├── moderation.py         kick / ban / warn family
 │   ├── automod.py            bad-language filter + honeypot
 │   ├── tickets.py            ticket panel + private channels
-│   └── admin.py              per-guild config
+│   └── admin.py              per-server config
 ├── data/
 │   ├── db.py                 aiosqlite layer (config / warnings / tickets)
 │   └── bad_words.txt         filter word list — edit freely
@@ -133,13 +249,46 @@ discord_bot/
 └── README.md
 ```
 
+---
+
+## Troubleshooting
+
+**"Disallowed intents" / bot won't start.** You didn't enable all three
+privileged intents in the developer portal. Go back to **Phase 1, step 1**.
+
+**Slash commands don't appear in Discord.** Either `DEV_GUILD_ID` is wrong
+(double-check by right-clicking the server icon → Copy Server ID), or it's
+unset and you're waiting on global sync — give it up to an hour, or set
+`DEV_GUILD_ID` to your test server for instant updates.
+
+**`Extension 'cogs.X' has no 'setup' function`.** Every cog must end with:
+
+```python
+async def setup(bot: commands.Bot) -> None:
+    await bot.add_cog(MyCog(bot))
+```
+
+If you're authoring a new cog, copy that pattern from any existing one.
+
+**Bot can't kick/ban "user with higher role".** Drag the bot's role above
+the target's role in **Server Settings → Roles**. The bot's hierarchy
+checks are enforcing a real Discord restriction, not being picky.
+
+**Honeypot didn't ban anyone.** Real users with admin or Manage Server
+permission are explicitly exempt (typo guard). Test with an alt account
+that has no special permissions.
+
+**Reset everything.** Stop the bot and delete `data/bot.sqlite3`. All
+per-server config, warnings, and ticket records will be wiped on next start.
+
+---
+
 ## Notes
 
-- `/warn` from automod uses the bot as the moderator. Language warnings count
-  toward the same auto-escalation thresholds as manual warnings.
-- The honeypot exempts admins and Manage Server holders so a typo from staff
-  never bans them.
+- `/warn` from automod uses the bot as the moderator. Language warnings
+  count toward the same auto-escalation thresholds as manual warnings.
+- The honeypot exempts admins and Manage Server holders so a typo from
+  staff never bans them.
 - Persistent ticket buttons survive restarts because their `custom_id`s are
   stable and `bot.add_view()` is called in `setup_hook`.
-- SQLite is created on first run at `data/bot.sqlite3`. Delete the file to
-  reset all guild state.
+- SQLite is created on first run at `data/bot.sqlite3`.
