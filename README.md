@@ -2,7 +2,7 @@
 
 A `discord.py` 2.x bot with rich `/userinfo`, full moderation, automod with
 leet-speak-aware language filter, a spam-bot honeypot, and a persistent-button
-support-ticket system. State is stored in SQLite via `aiosqlite`.
+support-ticket system. State is stored in SQLite via `aiosqlite` (WAL mode).
 
 > **Terminology:** Discord's API and every library call them **guilds**.
 > The user-facing UI calls them **servers**. They're the same thing.
@@ -10,49 +10,59 @@ support-ticket system. State is stored in SQLite via `aiosqlite`.
 
 ## Features
 
-### User info (`cogs/userinfo.py`)
+### User info (`src/cogs/user_info.py`)
 
 - `/userinfo` — rich profile embed (account age, join date, roles, status, badges, banner)
 - `/avatar` — avatar with PNG / WEBP / GIF download buttons
 - "User Info" right-click context menu
+- Per-user cooldowns guard the underlying Discord REST calls
 
-### Moderation (`cogs/moderation.py`)
+### Moderation (`src/cogs/moderation.py`)
 
 - `/kick`, `/ban`, `/unban` with reason + DM-before-action
 - `/warn` with DM and persistent record
 - `/warnings`, `/clearwarnings`, `/delwarn`
 - Hierarchy & self-protection checks (no banning the owner, no banning above the bot's role, etc.)
-- Auto-escalation: configurable `kick_at` and `ban_at` warning thresholds
+- Auto-escalation: configurable kick and ban warning thresholds
+- All commands defer the interaction before slow REST/DM work, so they never
+  time out on the 3-second ack window
 
-### Automod (`cogs/automod.py`)
+### Automod (`src/cogs/automod.py`)
 
 - Bad-language filter with normalization that defeats common bypasses:
   zero-width chars stripped, leet substitutions (`f4ck`, `sh!t`, `b1tch`),
   punctuation/spacing squashed (`f.u.c.k`)
 - Whole-word matching via `\b` boundaries to minimize false positives
-- Staff (Manage Messages) are exempt
-- Words live in `data/bad_words.txt`; `/automod_reload` picks up edits live
+- Staff (Manage Messages or the configured staff role) are exempt
+- Words live in `src/data/bad_words.txt`; `/automod_reload` picks up edits live
 - `/automod` toggle per server
+- Per-guild config is cached in memory and invalidated on writes, so the
+  filter doesn't hit SQLite on every message
 
-### Honeypot (`cogs/automod.py`)
+### Honeypot (`src/cogs/automod.py`)
 
 - Set any channel as a honeypot via `/set_honeypot`
-- Anyone (other than admins / Manage Server holders) who posts there is
+- Anyone without moderator permissions (Admin, Manage Server, Manage Messages,
+  Kick Members, Ban Members) or the configured staff role who posts there is
   banned instantly with 24h of message cleanup
 - Detailed report posted to mod log: account age, join date, message preview
 - Catches scraping spam bots that post in every channel they can read
 
-### Tickets (`cogs/tickets.py`)
+### Tickets (`src/cogs/tickets.py`)
 
 - `/ticket_panel` posts an embed with a persistent "Open Ticket" button
 - Each ticket creates a private text channel (user + staff role + bot only)
-- One open ticket per user per server (enforced)
+- One open ticket per user per server — enforced via per-user lock **and** a
+  UNIQUE partial index in SQLite (defence in depth against double-click races)
+- Atomic per-guild ticket numbering — no `MAX()+1` race
 - "Close Ticket" button or `/ticket_close` saves a plaintext transcript to the
-  mod-log channel and deletes the ticket channel
+  mod-log channel and deletes the ticket channel. If the mod log is missing or
+  the send fails, the channel is **kept open** and the transcript file is
+  posted in-channel so it is never silently lost
 - `/ticket_add` and `/ticket_remove` for adding extra participants
 - Persistent views — buttons keep working across bot restarts
 
-### Configuration (`cogs/admin.py`)
+### Configuration (`src/cogs/admin.py`)
 
 - `/set_modlog` — channel for moderation embeds and transcripts
 - `/set_honeypot` / `/clear_honeypot`
@@ -101,6 +111,7 @@ Still in the developer portal:
 
 #### 3. Install Python dependencies
 
+Requires **Python 3.10 or newer** (uses PEP 604 unions and `slots=True`).
 From the project root:
 
 ```bash
@@ -117,7 +128,9 @@ Copy `.env.example` to `.env` and fill in at least the token:
 ```
 DISCORD_TOKEN=paste_the_token_from_step_1_here
 DEV_GUILD_ID=                    # optional — see below
-BOT_DB_PATH=data/bot.sqlite3     # optional — DB file location
+ACTIVITY_STATUS="Always monitoring your behavior"  # optional
+BOT_DB_PATH=                     # optional — defaults to data/bot.sqlite3
+LOG_LEVEL=                       # optional — DEBUG/INFO/WARNING/ERROR
 ```
 
 ##### How to get a `DEV_GUILD_ID` (and why you want one)
@@ -144,23 +157,25 @@ and roles via Discord's autocomplete UI without touching IDs.
 #### 5. Run the bot
 
 ```bash
+cd src
 python bot.py
 ```
 
 A successful startup looks like:
 
 ```
-[INFO] bot: Database connected at data/bot.sqlite3
+[INFO] data.db: Database ready at data/bot.sqlite3 (schema v1)
 [INFO] bot: Loaded extension cogs.admin
 [INFO] bot: Loaded extension cogs.automod
 [INFO] bot: Loaded extension cogs.moderation
 [INFO] bot: Loaded extension cogs.tickets
-[INFO] bot: Loaded extension cogs.userinfo
+[INFO] bot: Loaded extension cogs.user_info
 [INFO] bot: Synced 22 commands to dev guild 123456789012345678
 [INFO] bot: Logged in as YourBot#1234 (id=...)
 ```
 
-Leave it running. Ctrl+C to stop.
+Leave it running. Ctrl+C to stop. On Linux/macOS, SIGTERM is also handled
+gracefully so the bot closes its DB connection cleanly under Docker/systemd.
 
 ### Phase 2 — Configure the server
 
@@ -176,8 +191,8 @@ and the command name and it'll prompt you for channels/roles.
 
 Pick (or create) a private staff-only channel. All moderation actions,
 auto-warn reports, honeypot bans, and ticket transcripts get posted here.
-Without this set, those events still happen but nothing is logged anywhere
-public.
+Without this set, those events still happen but transcripts get posted
+back in the ticket channel as a fallback.
 
 #### Required for tickets
 
@@ -215,10 +230,10 @@ To disable later: `/clear_honeypot`.
 Defaults are auto-kick at 3 warnings, auto-ban at 5. Change with:
 
 ```
-/set_warn_thresholds kick_at:3 ban_at:5
+/set_warn_thresholds kick_threshold:3 ban_threshold:5
 ```
 
-`ban_at` must be strictly greater than `kick_at`.
+`ban_threshold` must be ≥ `kick_threshold`.
 
 #### Verify
 
@@ -230,23 +245,95 @@ Shows everything currently set for this server.
 
 ---
 
+## Deployment
+
+### Docker (recommended)
+
+A `Dockerfile` and `docker-compose.yml` are included. The image runs as a
+non-root user and persists state to a `/data` volume.
+
+```bash
+# Build and start. .env in the repo root is read for credentials.
+docker compose up -d --build
+
+# Tail logs
+docker compose logs -f bot
+
+# Stop (gracefully closes the gateway and DB)
+docker compose down
+```
+
+The compose file maps a named volume `bot-data` to `/data` inside the
+container; the bot writes its SQLite database to `/data/bot.sqlite3`.
+The `restart: unless-stopped` policy auto-restarts on crash.
+
+### Systemd / process manager
+
+For a non-containerised install on Linux, a minimal unit file looks like:
+
+```ini
+[Unit]
+Description=TheMonitorBot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+WorkingDirectory=/srv/themonitorbot/src
+EnvironmentFile=/srv/themonitorbot/.env
+ExecStart=/srv/themonitorbot/venv/bin/python bot.py
+Restart=on-failure
+RestartSec=5
+KillSignal=SIGTERM
+TimeoutStopSec=30
+User=bot
+
+[Install]
+WantedBy=multi-user.target
+```
+
+### Backups
+
+The SQLite database is the only persistent state. Back up `data/bot.sqlite3`
+(or the Docker volume) before upgrades. WAL mode means an online
+`sqlite3 bot.sqlite3 ".backup '/path/to/backup.sqlite3'"` is safe while the
+bot is running.
+
+---
+
 ## Project layout
 
 ```
-discord_bot/
-├── bot.py                    entry point
-├── cogs/
-│   ├── userinfo.py           /userinfo, /avatar, context menu
-│   ├── moderation.py         kick / ban / warn family
-│   ├── automod.py            bad-language filter + honeypot
-│   ├── tickets.py            ticket panel + private channels
-│   └── admin.py              per-server config
-├── data/
-│   ├── db.py                 aiosqlite layer (config / warnings / tickets)
-│   └── bad_words.txt         filter word list — edit freely
+TheMonitorBot/
+├── src/
+│   ├── bot.py                entry point
+│   ├── cogs/
+│   │   ├── user_info.py      /userinfo, /avatar, context menu
+│   │   ├── moderation.py     kick / ban / warn family
+│   │   ├── automod.py        bad-language filter + honeypot
+│   │   ├── tickets.py        ticket panel + private channels
+│   │   └── admin.py          per-server config
+│   └── data/
+│       ├── db.py             aiosqlite layer (config / warnings / tickets)
+│       └── bad_words.txt     filter word list — edit freely
+├── Dockerfile
+├── docker-compose.yml
+├── pyproject.toml            python>=3.10, ruff, mypy, pytest config
 ├── requirements.txt
 ├── .env.example
 └── README.md
+```
+
+---
+
+## Development
+
+The project ships with `pyproject.toml` configuring ruff, mypy, and pytest:
+
+```bash
+pip install ruff mypy pytest pytest-asyncio
+ruff check src/
+mypy src/
+pytest
 ```
 
 ---
@@ -274,12 +361,14 @@ If you're authoring a new cog, copy that pattern from any existing one.
 the target's role in **Server Settings → Roles**. The bot's hierarchy
 checks are enforcing a real Discord restriction, not being picky.
 
-**Honeypot didn't ban anyone.** Real users with admin or Manage Server
-permission are explicitly exempt (typo guard). Test with an alt account
-that has no special permissions.
+**Honeypot didn't ban anyone.** Any member with a moderator-tier permission
+(Admin, Manage Server, Manage Messages, Kick Members, Ban Members) or the
+configured staff role is exempt. Test with an alt account that has no
+special permissions.
 
-**Reset everything.** Stop the bot and delete `data/bot.sqlite3`. All
-per-server config, warnings, and ticket records will be wiped on next start.
+**Reset everything.** Stop the bot and delete `data/bot.sqlite3` (plus the
+`-wal` and `-shm` sidecar files if present). All per-server config,
+warnings, and ticket records will be wiped on next start.
 
 ---
 
@@ -287,8 +376,11 @@ per-server config, warnings, and ticket records will be wiped on next start.
 
 - `/warn` from automod uses the bot as the moderator. Language warnings
   count toward the same auto-escalation thresholds as manual warnings.
-- The honeypot exempts admins and Manage Server holders so a typo from
-  staff never bans them.
+- The honeypot exempts every member with mod permissions or the configured
+  staff role, so a typo from staff never bans them.
 - Persistent ticket buttons survive restarts because their `custom_id`s are
   stable and `bot.add_view()` is called in `setup_hook`.
-- SQLite is created on first run at `data/bot.sqlite3`.
+- SQLite is created on first run at `data/bot.sqlite3` (or `BOT_DB_PATH`
+  if set). WAL mode + a 5-second `busy_timeout` are enabled for resilience.
+- A `schema_version` table tracks DB upgrades so future migrations stay
+  idempotent.
