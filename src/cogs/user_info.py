@@ -17,6 +17,9 @@ from discord.ext import commands
  
 log = logging.getLogger(__name__)
 
+# Cap username search across guild.members to bound CPU under abuse.
+USERNAME_SEARCH_LIMIT = 2_000
+
 # Map PublicUserFlags attribute names -> (label, emoji)
 FLAG_LABELS: dict[str, tuple[str, str]] = {
     "staff": ("Discord Staff", "🛡️"),
@@ -158,7 +161,7 @@ async def build_user_embed(
         embed.add_field(name="Account Type", value=" ".join(tags), inline=True)
  
     embed.add_field(name="Badges", value=humanize_flags(target), inline=False)
-    embed.set_footer(text="UserInfoBot")
+    embed.set_footer(text="TheMonitorBot")
     return embed, full_user
 
 def build_asset_view(target: discord.User | discord.Member, full_user: discord.User) -> discord.ui.View:
@@ -186,7 +189,7 @@ def build_asset_view(target: discord.User | discord.Member, full_user: discord.U
 class UserInfo(commands.Cog):
     """User information commands."""
     
-    def __init__(self, bot: commands.bot) -> None:
+    def __init__(self, bot: commands.Bot) -> None:
         self.bot = bot
         # Context menus must be registered as standalone app_commands; the
         # decorator-style on cog methods only works with bot.tree.context_menu.
@@ -239,7 +242,9 @@ class UserInfo(commands.Cog):
         # Username search — only meaningful inside a guild
         if interaction.guild is not None:
             lowered = query.lower().lstrip("@")
-            for m in interaction.guild.members:
+            for i, m in enumerate(interaction.guild.members):
+                if i >= USERNAME_SEARCH_LIMIT:
+                    break
                 if (
                     m.name.lower() == lowered
                     or (m.global_name and m.global_name.lower() == lowered)
@@ -259,6 +264,7 @@ class UserInfo(commands.Cog):
         user="A mention, user ID, or username. Defaults to yourself.",
         ephemeral="If true, only you will see the response.",
     )
+    @app_commands.checks.cooldown(3, 10.0, key=lambda i: i.user.id)
     async def userinfo(
         self,
         interaction: discord.Interaction,
@@ -292,6 +298,7 @@ class UserInfo(commands.Cog):
         description="Show a user's avatar with download links for each format.",
     )
     @app_commands.describe(user="A mention, user ID, or username. Defaults to yourself.")
+    @app_commands.checks.cooldown(3, 10.0, key=lambda i: i.user.id)
     async def avatar(
         self,
         interaction: discord.Interaction,

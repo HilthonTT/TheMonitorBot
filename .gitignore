@@ -217,4 +217,10 @@ __marimo__/
 # Streamlit
 .streamlit/secrets.toml
 
-/data
+# SQLite database files (production bot state).
+# Note: src/data/bad_words.txt lives under src/data and is intentionally tracked.
+/data/
+*.sqlite3
+*.sqlite3-journal
+*.sqlite3-wal
+*.sqlite3-shm
