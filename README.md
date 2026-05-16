@@ -62,6 +62,19 @@ support-ticket system. State is stored in SQLite via `aiosqlite` (WAL mode).
 - `/ticket_add` and `/ticket_remove` for adding extra participants
 - Persistent views — buttons keep working across bot restarts
 
+### Music (`src/cogs/music/music.py`)
+
+- `/join` — bot joins your voice channel (or one you specify)
+- `/play <search>` — search YouTube and queue a song (auto-joins if not in VC)
+- `/pause`, `/resume`, `/skip`
+- `/queue` — show the next 5 queued songs
+- `/nowplaying` — show the currently playing song
+- `/volume <1-100>` — adjust playback volume
+- `/stop` — clear the queue and disconnect
+- One queue + playback loop per guild; auto-disconnects after 5 min idle
+- Streams via `yt-dlp` and `FFmpeg` — no files are downloaded
+- Requires **FFmpeg** on `PATH` and `PyNaCl` (see Phase 1 step 3)
+
 ### Configuration (`src/cogs/admin.py`)
 
 - `/set_modlog` — channel for moderation embeds and transcripts
@@ -121,6 +134,33 @@ venv\Scripts\activate           # Windows (PowerShell or cmd)
 pip install -r requirements.txt
 ```
 
+`requirements.txt` pins:
+
+| Package         | Why                                                       |
+| --------------- | --------------------------------------------------------- |
+| `discord.py`    | Discord gateway + slash-command framework                 |
+| `python-dotenv` | Loads `.env` at startup                                   |
+| `aiosqlite`     | Async SQLite for config / warnings / tickets              |
+| `async-timeout` | 5-min idle timeout in the music player loop               |
+| `yt-dlp`        | Resolves YouTube (and other site) audio streams for music |
+| `PyNaCl`        | Voice packet encryption — required by `discord.py` for VC |
+
+##### Music cog system requirements
+
+The music cog also needs two things **outside** of `pip`:
+
+1. **FFmpeg** must be on `PATH`. Test with `ffmpeg -version`.
+   - **Windows:** `winget install Gyan.FFmpeg` (or download from
+     <https://www.gyan.dev/ffmpeg/builds/> and add `bin/` to `PATH`) or download using choco
+     `choco install ffmpeg`
+   - **macOS:** `brew install ffmpeg`
+   - **Debian/Ubuntu:** `sudo apt install ffmpeg`
+2. **libopus** — bundled with `PyNaCl` wheels on Windows/macOS. On
+   minimal Linux images you may need `sudo apt install libopus0`.
+
+If you don't intend to use voice, none of the above matters — the cog
+will simply fail to load and the rest of the bot will run.
+
 #### 4. Configure environment variables
 
 Copy `.env.example` to `.env` and fill in at least the token:
@@ -167,10 +207,12 @@ A successful startup looks like:
 [INFO] data.db: Database ready at data/bot.sqlite3 (schema v1)
 [INFO] bot: Loaded extension cogs.admin
 [INFO] bot: Loaded extension cogs.automod
+[INFO] bot: Loaded extension cogs.documentation
 [INFO] bot: Loaded extension cogs.moderation
 [INFO] bot: Loaded extension cogs.tickets
 [INFO] bot: Loaded extension cogs.user_info
-[INFO] bot: Synced 22 commands to dev guild 123456789012345678
+[INFO] bot: Loaded extension cogs.music.music
+[INFO] bot: Synced 31 commands to dev guild 123456789012345678
 [INFO] bot: Logged in as YourBot#1234 (id=...)
 ```
 
@@ -311,7 +353,11 @@ TheMonitorBot/
 │   │   ├── moderation.py     kick / ban / warn family
 │   │   ├── automod.py        bad-language filter + honeypot
 │   │   ├── tickets.py        ticket panel + private channels
-│   │   └── admin.py          per-server config
+│   │   ├── admin.py          per-server config
+│   │   └── music/            voice playback (sub-package)
+│   │       ├── music.py      slash commands
+│   │       ├── music_player.py   per-guild queue + playback loop
+│   │       └── music_utils/  yt-dlp source + config + exceptions
 │   └── data/
 │       ├── db.py             aiosqlite layer (config / warnings / tickets)
 │       └── bad_words.txt     filter word list — edit freely
@@ -365,6 +411,14 @@ checks are enforcing a real Discord restriction, not being picky.
 (Admin, Manage Server, Manage Messages, Kick Members, Ban Members) or the
 configured staff role is exempt. Test with an alt account that has no
 special permissions.
+
+**Music: `/play` errors with "Couldn't fetch that song".** Almost always
+either FFmpeg is not on `PATH` (run `ffmpeg -version` to confirm) or your
+`yt-dlp` is outdated against YouTube's latest changes
+(`pip install -U yt-dlp`).
+
+**Music: bot joins VC but plays nothing.** Missing `PyNaCl` or libopus.
+Reinstall with `pip install --force-reinstall PyNaCl`.
 
 **Reset everything.** Stop the bot and delete `data/bot.sqlite3` (plus the
 `-wal` and `-shm` sidecar files if present). All per-server config,

@@ -76,12 +76,24 @@ class MonitorBot(commands.Bot):
         self.add_view(TicketPanelView())
         self.add_view(TicketCloseView())
 
-        # Auto-load every cog in ./cogs (skip files starting with _)
+        # Auto-load every cog in ./cogs (skip files/dirs starting with _).
+        # Top-level *.py files load as cogs.<stem>.
+        # Sub-packages load as cogs.<dir>.<dir> if <dir>/<dir>.py exists
+        # (e.g. cogs/music/music.py -> cogs.music.music).
         cogs_dir = Path(__file__).parent / "cogs"
+        extensions: list[str] = []
         for cog_file in sorted(cogs_dir.glob("*.py")):
             if cog_file.stem.startswith("_"):
                 continue
-            ext = f"cogs.{cog_file.stem}"
+            extensions.append(f"cogs.{cog_file.stem}")
+        for sub in sorted(p for p in cogs_dir.iterdir() if p.is_dir()):
+            if sub.name.startswith("_") or sub.name == "__pycache__":
+                continue
+            entry = sub / f"{sub.name}.py"
+            if entry.is_file():
+                extensions.append(f"cogs.{sub.name}.{sub.name}")
+
+        for ext in extensions:
             try:
                 await self.load_extension(ext)
                 log.info("Loaded extension %s", ext)

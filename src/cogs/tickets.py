@@ -40,7 +40,6 @@ log = logging.getLogger(__name__)
 TICKET_OPEN_ID = "ticket:open"
 TICKET_CLOSE_ID = "ticket:close"
 
-
 class TicketPanelView(discord.ui.View):
     """Persistent 'Open Ticket' button posted on a public panel message."""
 
