@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from typing import Any
 import logging
 import random
 import html
@@ -12,10 +13,8 @@ TRIVIA_URL = "https://opentdb.com/api.php?amount=1&category=18&type=multiple"
 
 log = logging.getLogger("bot")
 
-
 def decode_html(text: str) -> str:
     return html.unescape(text)
-
 
 class TriviaView(ui.View):
     def __init__(self, correct_answer: str, answers: list[str]):
@@ -78,7 +77,7 @@ class Trivia(commands.Cog):
         try:
             res = requests.get(TRIVIA_URL, timeout=10)
             res.raise_for_status()
-            data = res.json()
+            data: dict[Any, Any] = res.json()
 
             if not data.get("results"):
                 await interaction.followup.send("❌ Failed to fetch trivia.")
@@ -107,7 +106,6 @@ class Trivia(commands.Cog):
         except Exception as e:
             log.error(f"Trivia command failed: {e}", exc_info=True)
             await interaction.followup.send("❌ An error occurred while fetching the question.")
-
 
 async def setup(bot: commands.Bot) -> None:
     await bot.add_cog(Trivia(bot))
